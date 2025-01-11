@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>받아내림이 있는 세자리 뺄셈</title>
+  <style>
+    /* 흑백 테마 */
+    body {
+      background-color: white;
+      color: black;
+      margin: 0;
+      padding: 0;
+      font-family: sans-serif;
+    }
+
+    #gameContainer {
+      display: none;
+      text-align: center;
+      margin-top: 20px;
+    }
+
+    #questionContainer {
+      margin: 20px;
+    }
+
+    input[type="text"] {
+      background-color: white;
+      color: black;
+      border: 1px solid black;
+      padding: 5px;
+      width: 80px;
+      text-align: center;
+    }
+
+    button {
+      background-color: white;
+      color: black;
+      border: 1px solid black;
+      padding: 10px 20px;
+      cursor: pointer;
+      margin: 5px;
+    }
+    button:hover {
+      background-color: black;
+      color: white;
+    }
+
+    /* 에너지바(시간 게이지) */
+    #energyBarContainer {
+      width: 300px;
+      height: 20px;
+      border: 1px solid black;
+      margin: 0 auto;
+      position: relative;
+    }
+    #energyBar {
+      background-color: black;
+      height: 100%;
+      width: 100%;
+      transition: width 0.2s linear;
+    }
+
+    /* 전체 게임 시간 표기 */
+    #totalTime {
+      margin: 10px;
+    }
+
+    /* 오답/정답 표시 */
+    #resultMessage {
+      margin: 10px;
+      font-weight: bold;
+    }
+
+    /* 서버 전송 결과 */
+    #response {
+      margin: 10px;
+      white-space: pre-wrap; /* 응답 JSON 보기 편하도록 */
+    }
+
+    /* 난이도/이름 입력 첫 화면 */
+    #startScreen {
+      text-align: center;
+      margin-top: 50px;
+    }
+    #difficultySelect {
+      margin: 10px;
+    }
+  </style>
+</head>
+<body>
+
+<div id="startScreen">
+  <h1>받아내림이 있는 세자리 뺄셈 게임</h1>
+  <p>이름을 입력하고 난이도를 선택하세요.</p>
+  <div>
+    <label>이름: <input type="text" id="playerName" /></label>
+  </div>
+  <div id="difficultySelect">
+    <button onclick="startGame('최상')">최상 (20초, +20점)</button>
+    <button onclick="startGame('상')">상 (30초, +15점)</button>
+    <button onclick="startGame('중')">중 (40초, +13점)</button>
+    <button onclick="startGame('하')">하 (무제한, +10점)</button>
+  </div>
+</div>
+
+<div id="gameContainer">
+  <!-- 전체 경과 시간 -->
+  <div id="totalTime">전체 경과 시간: <span id="elapsedTime">0</span>초</div>
+  <!-- 남은 기회 -->
+  <div id="lives">남은 기회: 3</div>
+  <!-- 점수 -->
+  <div id="scoreBoard">점수: 0</div>
+  <!-- 에너지바 -->
+  <div id="energyBarContainer">
+    <div id="energyBar"></div>
+  </div>
+
+  <div id="questionContainer">
+    <h2 id="questionText">문제</h2>
+    <input type="text" id="userAnswer" placeholder="정답" />
+    <button id="submitAnswerBtn" onclick="submitAnswer()">확인</button>
+  </div>
+
+  <div id="resultMessage"></div>
+
+  <!-- 전송 버튼 및 결과 표시 -->
+  <button id="sendScoreBtn" style="display:none;" onclick="sendScore()">점수 전송</button>
+  <div id="response"></div>
+</div>
+
+<script>
+/*
+  (3) 서버에 전송하는 함수
+*/
+function saveData(game, name, score, elapsedTime) {
+  const FUNCTION_URL = "https://us-central1-record-f420d.cloudfunctions.net/report";
+
+  const requestData = {
+    game,
+    name,
+    score: parseInt(score, 10),
+    elapsedTime: parseInt(elapsedTime, 10)
+  };
+
+  fetch(FUNCTION_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(requestData)
+  })
+  .then(async (response) => {
+      const responseData = await response.json();
+      if (response.ok) {
+          document.getElementById('response').innerText = 
+              `성공: ${JSON.stringify(responseData, null, 2)}`;
+      } else {
+          document.getElementById('response').innerText = 
+              `오류: ${JSON.stringify(responseData, null, 2)}`;
+      }
+  })
+  .catch((error) => {
+      console.error('요청 실패:', error);
+      document.getElementById('response').innerText = 
+          `네트워크 오류: ${error.message}`;
+  });
+}
+
+/*
+  (1) "받아내림이 있는" 3자리 뺄셈 문제 100개 생성
+     - A >= B (음수 결과 x)
+     - 적어도 한 자리에서 A의 자리가 B의 자리보다 작아야 함(=> 반드시 borrow 발생)
+*/
+function generateQuestions() {
+  const questions = new Set(); // (A-B)를 문자열로 저장해 중복 방지
+  const result = [];
+
+  while (result.length < 100) {
+    const A = Math.floor(Math.random() * 900) + 100; // [100..999]
+    const B = Math.floor(Math.random() * 900) + 100; // [100..999]
+
+    if (A < B) continue; // A>=B 아니면 skip
+
+    // 각 자리 분해
+    const a1 = Math.floor(A / 100),       b1 = Math.floor(B / 100);
+    const a2 = Math.floor((A % 100) / 10),b2 = Math.floor((B % 100) / 10);
+    const a3 = A % 10,                    b3 = B % 10;
+
+    // "받아내림"이 발생하려면 적어도 한 자릿수에서 a_i < b_i
+    // + A >= B
+    const borrowNeeded = (a1 < b1) || (a2 < b2) || (a3 < b3);
+    if (!borrowNeeded) continue;
+
+    const key = `${A}-${B}`;
+    if (!questions.has(key)) {
+      questions.add(key);
+      result.push({
+        q: `${A} - ${B}`,
+        a: A - B
+      });
+    }
+  }
+
+  // 무작위 셔플
+  shuffle(result);
+  return result;
+}
+
+/* 배열 셔플 함수 */
+function shuffle(array) {
+  for (let i = array.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [array[i], array[j]] = [array[j], array[i]];
+  }
+}
+
+/*
+  게임 진행 전역 변수
+*/
+let allQuestions = [];
+let currentIndex = 0;
+let score = 0;
+let lives = 3;
+let timer;
+let totalTimeInterval;
+let timeLimit = 0;
+let isGameOver = false;
+let startTime = 0;
+
+// 난이도별 점수
+const difficultyScore = {
+  "최상": 20,
+  "상": 15,
+  "중": 13,
+  "하": 10
+};
+
+/*
+  (2) 게임 시작
+*/
+function startGame(difficulty) {
+  const nameInput = document.getElementById("playerName").value.trim();
+  if (!nameInput) {
+    alert("이름을 입력해주세요!");
+    return;
+  }
+
+  // 난이도별 초기 타이머
+  if (difficulty === "최상") {
+    timeLimit = 20;
+  } else if (difficulty === "상") {
+    timeLimit = 30;
+  } else if (difficulty === "중") {
+    timeLimit = 40;
+  } else {
+    timeLimit = 0; // 하
+  }
+
+  // 문제 생성
+  allQuestions = generateQuestions();
+
+  // 초기화
+  currentIndex = 0;
+  score = 0;
+  lives = 3;
+  isGameOver = false;
+
+  // UI 세팅
+  document.getElementById("startScreen").style.display = "none";
+  document.getElementById("gameContainer").style.display = "block";
+  document.getElementById("scoreBoard").innerText = "점수: 0";
+  document.getElementById("lives").innerText = "남은 기회: 3";
+  document.getElementById("response").innerText = "";
+  document.getElementById("sendScoreBtn").style.display = "none";
+
+  // 전체 경과 시간 측정 시작
+  startTime = Date.now();
+  totalTimeInterval = setInterval(updateTotalTime, 1000);
+
+  showQuestion();
+}
+
+/* 전체 경과 시간 갱신 */
+function updateTotalTime() {
+  const elapsed = Math.floor((Date.now() - startTime) / 1000);
+  document.getElementById("elapsedTime").innerText = elapsed;
+}
+
+/* 문제 표시 */
+function showQuestion() {
+  if (isGameOver) return;
+
+  if (currentIndex >= allQuestions.length) {
+    // 100문제 다 풀면 무한 반복
+    allQuestions = generateQuestions();
+    currentIndex = 0;
+  }
+
+  const questionData = allQuestions[currentIndex];
+  document.getElementById("questionText").innerText = questionData.q + " = ?";
+  document.getElementById("userAnswer").value = "";
+  document.getElementById("resultMessage").innerText = "";
+
+  if (timeLimit > 0) {
+    startEnergyBar(timeLimit);
+  } else {
+    resetEnergyBar(); // 하
+  }
+}
+
+/* 에너지바 타이머 시작 */
+function startEnergyBar(seconds) {
+  resetEnergyBar();
+  let remaining = 100; 
+  const decrement = 100 / seconds;
+
+  timer = setInterval(() => {
+    remaining -= decrement;
+    if (remaining <= 0) {
+      remaining = 0;
+      clearInterval(timer);
+      // 시간 초과 => 오답
+      lives--;
+      document.getElementById("lives").innerText = "남은 기회: " + lives;
+      if (lives <= 0) {
+        endGame();
+        return;
+      }
+      currentIndex++;
+      showQuestion();
+      return;
+    }
+    document.getElementById("energyBar").style.width = remaining + "%";
+  }, 1000);
+}
+
+/* 에너지바 리셋 */
+function resetEnergyBar() {
+  clearInterval(timer);
+  document.getElementById("energyBar").style.width = "100%";
+}
+
+/* 제출 버튼 */
+function submitAnswer() {
+  if (isGameOver) return;
+
+  const userAns = parseInt(document.getElementById("userAnswer").value, 10);
+  const correctAns = allQuestions[currentIndex].a;
+
+  // 시간 제한이 있다면 타이머 정지
+  if (timeLimit > 0) {
+    clearInterval(timer);
+  }
+
+  if (userAns === correctAns) {
+    // 정답
+    const difficulty = getCurrentDifficulty();
+    score += difficultyScore[difficulty];
+    document.getElementById("scoreBoard").innerText = "점수: " + score;
+    document.getElementById("resultMessage").innerText = "정답입니다!";
+  } else {
+    // 오답
+    lives--;
+    document.getElementById("lives").innerText = "남은 기회: " + lives;
+    document.getElementById("resultMessage").innerText =
+      "오답! 정답은 " + correctAns + " 입니다.";
+    if (lives <= 0) {
+      endGame();
+      return;
+    }
+  }
+
+  currentIndex++;
+  showQuestion();
+}
+
+/* 현재 난이도 추론 */
+function getCurrentDifficulty() {
+  if (timeLimit === 20) return "최상";
+  if (timeLimit === 30) return "상";
+  if (timeLimit === 40) return "중";
+  return "하";
+}
+
+/* 게임 종료 */
+function endGame() {
+  isGameOver = true;
+  clearInterval(timer);
+  clearInterval(totalTimeInterval);
+  document.getElementById("resultMessage").innerText =
+    "게임 종료! 최종 점수: " + score;
+  // 전송 버튼 보이기
+  document.getElementById("sendScoreBtn").style.display = "inline-block";
+}
+
+/* (4) 점수 전송 */
+function sendScore() {
+  const nameInput = document.getElementById("playerName").value.trim();
+  const elapsed = Math.floor((Date.now() - startTime) / 1000);
+
+  saveData("받아내림이 있는 세자리 뺄셈", nameInput, score, elapsed);
+}
+</script>
+</body>
+</html>
